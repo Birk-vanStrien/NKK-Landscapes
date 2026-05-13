@@ -3,6 +3,8 @@ import random
 import numba
 import multiprocessing
 from concurrent.futures import ProcessPoolExecutor
+from functools import partial
+from scipy.stats import mode
 
 ## Parameters
 genome_size = 16 
@@ -13,7 +15,7 @@ mutation_rate = 0.001
 group_split_rate = 1 
 K = 1
 K2 = 1 
-endtime = 200000000
+endtime = 2000000
 
 ##################################################################################################################
 
@@ -310,31 +312,26 @@ def findOptimalFitness(epistasis_matrix, coefficients, K, K2, genome_size):
 
 ### Simulation logic
 
-def run_simulation(sim_id):
+## Define a single simulation
+def run_simulation(sim_id, coefficients_input, epistasis_matrix_input, optimal_fitness):
+    # Give each sim a unique seed
     np.random.seed(sim_id)
     random.seed(sim_id)
-    # LOCAL INITIALIZATION
+    
+    # Create unique population
     population = np.random.randint(0, 2, size = (group_number, max_group_size, genome_size), dtype = np.int8)
     group_sizes = np.full((group_number), starting_group_size, dtype = np.int8)
     group_averages = np.zeros((group_number, genome_size))
     
+    # Initial calculation of group averages and fitnesses
     for g in range(group_number):
         recalculateGroupAverage(g, population, group_sizes, group_averages, max_group_size)
-
-    epistasis_matrix = np.zeros((genome_size, K + K2), dtype = int)
-    for i in range(genome_size):
-        available_loci = np.delete(np.arange(genome_size), i)
-        epistasis_matrix[i, :K] = np.random.choice(available_loci, size = K, replace = False)
-        epistasis_matrix[i, K:] = np.random.choice(genome_size, size = K2, replace = False)
-
-    fitness_matrix = np.random.beta(0.5, 0.5, size=(genome_size, 2**(K+K2+1)))
-    coefficients = calculateCoefficients(fitness_matrix, K, K2, genome_size)
-    
     fitness_array = np.zeros(group_number * max_group_size)
     for g in range(group_number):
-        recalculateGroupFitness(population, g, group_sizes, group_averages, fitness_array, epistasis_matrix, coefficients, K, K2, genome_size, max_group_size)
+        recalculateGroupFitness(population, g, group_sizes, group_averages, fitness_array, epistasis_matrix_input, coefficients_input, K, K2, genome_size, max_group_size)
 
-    optimal_fitness = findOptimalFitness(epistasis_matrix, coefficients, K, K2, genome_size)
+    # Calculate optimal fitness for this landscape (check whether the landscapes match)
+    optimal_fitness = findOptimalFitness(epistasis_matrix_input, coefficients_input, K, K2, genome_size)
     print(f"Simulation {sim_id} - Optimal Fitness: {optimal_fitness:.4f}")
 
     # Data collection settings
@@ -353,15 +350,16 @@ def run_simulation(sim_id):
     dominance_plot_snapshots = []
 
     tracked_indices = createTrackedSample(group_number, max_group_size, genome_size, track_amount)
-    initial_locus_results = locusAnalysis(population, group_sizes, group_averages, epistasis_matrix, coefficients, K, K2, tracked_indices, genome_size)
+    initial_locus_results = locusAnalysis(population, group_sizes, group_averages, epistasis_matrix_input, coefficients_input, K, K2, tracked_indices, genome_size)
 
+    # Collect data at certain intervals
     for i in range(endtime+1):
         if i % temporal_resolution == 0:
             print(f"Simulation {sim_id}, Timestep {i}/{endtime}")
             avg_fit = np.mean(fitness_array[fitness_array > 0])
             average_fitness_over_time.append(avg_fit)
-            ind_d, grp_d = determineDominanceSample(population, group_sizes, group_averages, epistasis_matrix, coefficients, K, K2, genome_size, group_number, max_group_size, dominance_sample_size)
-            
+            ind_d, grp_d = determineDominanceSample(population, group_sizes, group_averages, epistasis_matrix_input, coefficients_input, K, K2, genome_size, group_number, max_group_size, dominance_sample_size)
+
             suboptimal_counts.append(((ind_d >= 0) & (grp_d >= 0)).sum())
             group_dominance_counts.append(((ind_d > 0) & (grp_d < 0)).sum())
             individual_dominance_counts.append(((ind_d < 0) & (grp_d > 0)).sum())
@@ -373,11 +371,11 @@ def run_simulation(sim_id):
             weighted_dominance_ratios_over_time.append(weightedDominanceRatio(ind_d, grp_d))
 
         if i in checkpoints:
-            d_ind, d_grp = determineDominanceSample(population, group_sizes, group_averages, epistasis_matrix, coefficients, K, K2, genome_size, group_number, max_group_size, dominance_sample_size)
+            d_ind, d_grp = determineDominanceSample(population, group_sizes, group_averages, epistasis_matrix_input, coefficients_input, K, K2, genome_size, group_number, max_group_size, dominance_sample_size)
             dominance_plot_snapshots.append((i, d_ind, d_grp))
         
         if i % (endtime//locus_analysis_resolution) == 0:
-            current_locus_results = locusAnalysis(population, group_sizes, group_averages, epistasis_matrix, coefficients, K, K2, tracked_indices, genome_size)
+            current_locus_results = locusAnalysis(population, group_sizes, group_averages, epistasis_matrix_input, coefficients_input, K, K2, tracked_indices, genome_size)
             acc, enf, un_ag, un_co, com_g, com_i, a_sw, c_sw, rem = 0, 0, 0, 0, 0, 0, 0, 0, 0
             for prev, curr in zip(initial_locus_results, current_locus_results):
                 if curr == "REMOVED": rem += 1; continue
@@ -392,11 +390,24 @@ def run_simulation(sim_id):
                 else: rem += 1
             accommodation_history.append(acc); enforcement_history.append(enf); unchanged_agreement_history.append(un_ag); unchanged_conflict_history.append(un_co)
             com_group_history.append(com_g); com_individual_history.append(com_i); agreed_swap_history.append(a_sw); conflicted_swap_history.append(c_sw); removed_locus_history.append(rem)
+        
+        # Perform a reproduction event
+        reproductionEvent(population, group_sizes, group_averages, fitness_array, epistasis_matrix_input, coefficients_input, K, K2, genome_size, max_group_size, group_number, mutation_rate, group_split_rate)
+        # Repeat until end of simulation
 
-        reproductionEvent(population, group_sizes, group_averages, fitness_array, epistasis_matrix, coefficients, K, K2, genome_size, max_group_size, group_number, mutation_rate, group_split_rate)
+    # get average genome at the end of the simulation
+    # Create a boolean mask to select only active individuals in each group
+    active_mask = np.arange(max_group_size) < group_sizes[:, np.newaxis]
+    # Extract all active genomes: shape will be (TotalActivePop, genome_size)
+    all_active_genomes = population[active_mask]
+    # Calculate the mean across the entire active population for each locus
+    final_average_genome = np.mean(all_active_genomes, axis=0)
+
+    # get most common genome at the end of the simulation
+    final_most_common_genome = mode(all_active_genomes, axis=0)
 
     # Save data
-    data_filename = f"{genome_size}-{max_group_size}-{group_number} K={K} K2={K2} S={group_split_rate} M={mutation_rate} T={endtime/1000000}M Sim_{sim_id}.npz"
+    data_filename = f"{genome_size}-{max_group_size}-{group_number} K={K} K2={K2} S={group_split_rate} M={mutation_rate} T={endtime/1000000}M Shared Landscape Sim_{sim_id}.npz"
     np.savez(data_filename, 
             timesteps = np.arange(0, endtime+1, temporal_resolution),
             dominance_sample_size = dominance_sample_size,
@@ -423,13 +434,38 @@ def run_simulation(sim_id):
             agreed_swap_history = np.array(agreed_swap_history),
             conflicted_swap_history = np.array(conflicted_swap_history),
             removed_locus_history = np.array(removed_locus_history),
-            optimal_fitness = optimal_fitness
+            optimal_fitness = optimal_fitness,
+            final_average_genome = final_average_genome,
+            final_most_common_genome = final_most_common_genome,
         )
     print(f"Simulation {sim_id} complete. Saved to {data_filename}")
 
 if __name__ == "__main__":
-    num_simulations = 10
+    # Create a single shared landscape for all simulations
+    print("Generating shared landscape...")
+    temp_epistasis = np.zeros((genome_size, K + K2), dtype = int)
+    for i in range(genome_size):
+        available_loci = np.delete(np.arange(genome_size), i) # Exclude the focal locus from potential partners
+        temp_epistasis[i, :K] = np.random.choice(available_loci, size = K, replace = False)
+        temp_epistasis[i, K:] = np.random.choice(genome_size, size = K2, replace = False) # Focal included in this case
+
+    temp_fitness_matrix = np.random.beta(0.5, 0.5, size=(genome_size, 2**(K+K2+1)))
+    shared_coefficients = calculateCoefficients(temp_fitness_matrix, K, K2, genome_size)
+    
+    # Calculate the optimal fitness of this landscape
+    print("Calculating global optimal fitness...")
+    shared_optimal = findOptimalFitness(temp_epistasis, shared_coefficients, K, K2, genome_size)
+    print(f"Landscape Peak: {shared_optimal:.4f}")
+
+    # Run multiple simulations in parallel using the same landscape
+    num_simulations = 4
     cores_to_use = min(multiprocessing.cpu_count(), num_simulations)
+    
+    sim_wrapper = partial(run_simulation, 
+                          coefficients_input=shared_coefficients, 
+                          epistasis_matrix_input=temp_epistasis,
+                          optimal_fitness=shared_optimal)
+
     print(f"Starting {num_simulations} simulations on {cores_to_use} cores...")
     with ProcessPoolExecutor(max_workers=cores_to_use) as executor:
-        list(executor.map(run_simulation, range(num_simulations)))
+        list(executor.map(sim_wrapper, range(num_simulations)))
