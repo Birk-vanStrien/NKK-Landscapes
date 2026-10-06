@@ -1,3 +1,6 @@
+## NOTES
+# Requires the summary files from Single simulation plots
+
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
