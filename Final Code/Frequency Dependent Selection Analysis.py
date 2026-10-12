@@ -5,6 +5,7 @@ import matplotlib.pyplot as plt
 show_optimal_mutant_proportion = True
 show_crossing_point = True
 show_nodes = True  # Show stable and unstable nodes on the x-axis
+show_region_shading = False  # Show shaded regions for selection dynamics
 
 # Wildtype values
 Wt0 = 0.4 # Wildtype starting value (at p=0)
@@ -105,7 +106,7 @@ if show_nodes:
             ax.scatter([nx], [0.0], color='white', s=140, zorder=6, marker='o', edgecolors='black', label=label)
             unstable_plotted = True
 
-    # Add fancy selection arrows (phase line arrows) between intervals
+    # Add arrows
     for i in range(len(nodes) - 1):
         x_start = nodes[i][0]
         x_end = nodes[i+1][0]
@@ -125,23 +126,24 @@ if show_nodes:
                     zorder=7)
 
 ## Region Shading
-# Mutant is individually selected against (Wt > Mt), but spreading them BENEFITS the group (dG/dx > 0)
-ax.fill_between(x, Beta_Wt, Beta_Mt, where=Wt_favored & G_increasing, 
-                color='yellow', alpha=0.3, label='Spread possible with group selection',
-                interpolate=True)
+if show_region_shading:
+    # Mutant is individually selected against (Wt > Mt), but spreading them BENEFITS the group (dG/dx > 0)
+    ax.fill_between(x, Beta_Wt, Beta_Mt, where=Wt_favored & G_increasing, 
+                    color='yellow', alpha=0.3, label='Spread possible with group selection',
+                    interpolate=True)
 
-# Mutant is individually selected against (Wt > Mt), and spreading them HARMS the group (dG/dx < 0)
-ax.fill_between(x, Beta_Wt, Beta_Mt, where=Wt_favored & G_decreasing, 
+    # Mutant is individually selected against (Wt > Mt), and spreading them HARMS the group (dG/dx < 0)
+    ax.fill_between(x, Beta_Wt, Beta_Mt, where=Wt_favored & G_decreasing, 
                 color='red', alpha=0.3, label='No spread',
                 interpolate=True)
 
-# Mutant is individually favored (Mt > Wt), and spreading them BENEFITS the group (dG/dx > 0)
-ax.fill_between(x, Beta_Wt, Beta_Mt, where=Mt_favored & G_increasing, 
+    # Mutant is individually favored (Mt > Wt), and spreading them BENEFITS the group (dG/dx > 0)
+    ax.fill_between(x, Beta_Wt, Beta_Mt, where=Mt_favored & G_increasing, 
                 color='green', alpha=0.3, label='Spread supported',
                 interpolate=True)
 
-# Mutant is individually favored (Mt > Wt), but spreading them HARMS the group (dG/dx < 0)
-ax.fill_between(x, Beta_Wt, Beta_Mt, where=Mt_favored & G_decreasing, 
+    # Mutant is individually favored (Mt > Wt), but spreading them HARMS the group (dG/dx < 0)
+    ax.fill_between(x, Beta_Wt, Beta_Mt, where=Mt_favored & G_decreasing, 
                 color='blue', alpha=0.3, label='Spread limited by group selection',
                 interpolate=True)
 
